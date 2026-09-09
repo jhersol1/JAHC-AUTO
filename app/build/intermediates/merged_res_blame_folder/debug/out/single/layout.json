@@ -1,0 +1,18 @@
+[
+    {
+        "merged": "com.jahc.auto.app-mergeDebugResources-39:/layout/activity_main.xml",
+        "source": "com.jahc.auto.app-main-42:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.jahc.auto.app-mergeDebugResources-39:/layout/item_schedule.xml",
+        "source": "com.jahc.auto.app-main-42:/layout/item_schedule.xml"
+    },
+    {
+        "merged": "com.jahc.auto.app-mergeDebugResources-39:/layout/activity_test_lock.xml",
+        "source": "com.jahc.auto.app-main-42:/layout/activity_test_lock.xml"
+    },
+    {
+        "merged": "com.jahc.auto.app-mergeDebugResources-39:/layout/activity_edit.xml",
+        "source": "com.jahc.auto.app-main-42:/layout/activity_edit.xml"
+    }
+]

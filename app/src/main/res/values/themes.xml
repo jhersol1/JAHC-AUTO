@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.JAHCAuto" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#00C853</item>
+        <item name="colorPrimaryDark">#009624</item>
+        <item name="colorAccent">#00C853</item>
+        <item name="android:statusBarColor">#0F1A0F</item>
+        <item name="android:navigationBarColor">#0F1A0F</item>
+    </style>
+</resources>

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">JAHC Auto</string>
+    <string name="accessibility_desc">Envía mensajes programados automáticamente en WhatsApp y WhatsApp Business, incluido dual.</string>
+</resources>
