@@ -746,8 +746,9 @@ class AutoAccessibilityService : AccessibilityService() {
             return trySwipeUp()
         }
 
-        // Ya está el pad -> entra PIN async con cooldown de 15s después de PIN exitoso
-        if (System.currentTimeMillis() - lastPinSuccess < 115000) return true
+        // Ya está el pad -> entra PIN async. Sin cooldown por tiempo: si sigue
+        // bloqueado hay que reintentar (alarmas seguidas). isPinRunning evita
+        // cadenas duplicadas y lastPinTap espacía toques.
         if (isPinRunning) return true
         if (System.currentTimeMillis() - lastPinTap < 2500) return true
         lastPinTap = System.currentTimeMillis()
