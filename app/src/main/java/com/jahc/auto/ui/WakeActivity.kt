@@ -37,7 +37,8 @@ class WakeActivity : AppCompatActivity() {
             try {
                 val prefs = getSharedPreferences("jahc_auto", MODE_PRIVATE)
                 val t = prefs.getString("pending_target", null)
-                if (t != null) {
+                val ts = prefs.getLong("pending_ts", 0)
+                if (t != null && System.currentTimeMillis() - ts < 600000) {
                     schedule = com.jahc.auto.data.Schedule(
                         id = prefs.getLong("pending_id", -1),
                         contactName = prefs.getString("pending_contact", "Jhersol2.0") ?: "Jhersol2.0",
@@ -77,7 +78,7 @@ class WakeActivity : AppCompatActivity() {
                     val baseIntent = Intent(Intent.ACTION_VIEW).apply {
                         data = android.net.Uri.parse(uri)
                         `package` = pkg
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                     }
                     try { startActivity(baseIntent) } catch (_: Exception) {
                         val fallback = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }

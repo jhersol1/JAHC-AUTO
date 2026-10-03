@@ -19,6 +19,9 @@ class AutoAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile var pendingSchedule: Schedule? = null
         @Volatile var enabled = false
+        @Volatile var instance: AutoAccessibilityService? = null
+        // Última app real del usuario (para CASO 2: volver donde estaba).
+        @Volatile var lastUserPkg: String? = null
     }
 
     private var lastLockAction = 0L
@@ -32,6 +35,8 @@ class AutoAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         enabled = true
+        instance = this
+        SendQueue.pumpIfIdle(this)
     }
 
     private fun findLockScreenRoot(): AccessibilityNodeInfo? {
@@ -50,11 +55,24 @@ class AutoAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Rastreo continuo de la app del usuario (eventos reales, hilo main).
+        try {
+            val ep = event?.packageName?.toString()
+            val locked0 = try { (getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked } catch (_: Exception) { true }
+            if (!BusinessSendMachine.active && !locked0 && ep != null &&
+                ep != "com.whatsapp.w4b" && ep != "com.whatsapp" && ep != "com.jahc.auto" &&
+                ep != "android" && ep != "com.android.systemui"
+            ) lastUserPkg = ep
+        } catch (_: Exception) {}
+        // La cola manda: si hay un mensaje esperando y nadie lo procesa, empezar.
+        try { SendQueue.pumpIfIdle(this) } catch (_: Exception) {}
         if (pendingSchedule == null) {
             try {
                 val prefs = getSharedPreferences("jahc_auto", MODE_PRIVATE)
                 val t = prefs.getString("pending_target", null)
-                if (t != null) {
+                // Solo prefs frescas (<10min): si no, es un schedule viejo ya procesado.
+                val ts = prefs.getLong("pending_ts", 0)
+                if (t != null && System.currentTimeMillis() - ts < 600000) {
                     pendingSchedule = com.jahc.auto.data.Schedule(
                         id = prefs.getLong("pending_id", -1),
                         contactName = prefs.getString("pending_contact", "Jhersol2.0") ?: "Jhersol2.0",
@@ -146,26 +164,14 @@ class AutoAccessibilityService : AccessibilityService() {
         val isLockedBiz = try { (getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked } catch (_: Exception) { false }
         if (isLockedBiz) { handleLockScreen(root); return }
 
-        // === BUSINESS: delegar todo a BusinessFlowHandler (separado de Dual) ===
-        if (sch?.target == "whatsapp_business" && pkg == "com.whatsapp.w4b") {
-            if (BusinessFlowHandler.handlePickerEvent(this, root, sch)) return
-            if (System.currentTimeMillis() - lastDirectAction < 15000) return
-            lastDirectAction = System.currentTimeMillis()
-            android.os.Handler(mainLooper).postDelayed({
-                if (BusinessFlowHandler.handleDirectMessage(this, sch)) return@postDelayed
-            }, 3000)
-            android.os.Handler(mainLooper).postDelayed({
-                if (pendingSchedule != null && pendingSchedule?.id == sch.id) {
-                    showResultNotification(false, sch)
-                    pendingSchedule = null
-                    performGlobalAction(GLOBAL_ACTION_HOME)
-                }
-            }, 30000)
+        // === BUSINESS: máquina de estados (cola + verificación, sin delays ciegos) ===
+        if (sch?.target == "whatsapp_business") {
+            BusinessSendMachine.onEvent(this)
             return
         }
 
-        // Picker "Enviar a..." -> Business: Buscar -> filtrar -> click (sin duplicar envios)
-        if (containsText(root, "Enviar a") && !waitingForDualPicker) {
+        // Picker "Enviar a..." -> Dual: Buscar -> filtrar -> click (Business lo maneja su máquina)
+        if (containsText(root, "Enviar a") && !waitingForDualPicker && sch.target != "whatsapp_business") {
             if (System.currentTimeMillis() - lastPickerAction < 2800) return
             lastPickerAction = System.currentTimeMillis()
             val targetContact = sch.contactName.ifBlank { "Andres" }
@@ -368,6 +374,7 @@ class AutoAccessibilityService : AccessibilityService() {
         if (System.currentTimeMillis() - lastDirectAction < 15000) return
         if (System.currentTimeMillis() - lastDualAction < 8000) return
         if (waitingForDualPicker) return
+        if (sch.target == "whatsapp_business") return // Business: solo la máquina
         lastDirectAction = System.currentTimeMillis()
         // Espera 3s a que el chat cargue antes de escribir (evita clicks fantasma)
         android.os.Handler(mainLooper).postDelayed({
@@ -441,7 +448,7 @@ class AutoAccessibilityService : AccessibilityService() {
         try { getSharedPreferences("jahc_auto", MODE_PRIVATE).edit().clear().apply() } catch (_: Exception) {}
     }
 
-    internal fun showResultNotification(success: Boolean, sch: Schedule) {
+    internal fun showResultNotification(success: Boolean, sch: Schedule, reason: String? = null) {
         try {
             clearPendingPrefs()
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -452,7 +459,7 @@ class AutoAccessibilityService : AccessibilityService() {
                 nm.createNotificationChannel(ch)
             }
             val title = if (success) "Envío correcto" else "Envío fallido"
-            val text = if (success) "Mensaje a ${sch.contactName} enviado" else "No se pudo enviar a ${sch.contactName} - demora/altercado"
+            val text = if (success) "Mensaje a ${sch.contactName} enviado" else "No se pudo enviar a ${sch.contactName} - ${reason ?: "demora/altercado"}"
             val n = NotificationCompat.Builder(this, chId)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(title)
@@ -728,7 +735,7 @@ class AutoAccessibilityService : AccessibilityService() {
 
     private fun handleLockScreen(root: AccessibilityNodeInfo): Boolean {
         val prefs = getSharedPreferences("jahc_auto", MODE_PRIVATE)
-        val code = "010798" // PIN fijo para pruebas
+        val code = "010791" // PIN fijo para pruebas
         if (code.isEmpty() || !code.all { it.isDigit() }) return false
 
         // Si es shade de notificaciones -> swipe arriba (debounce 3s solo para swipe)
@@ -800,9 +807,19 @@ class AutoAccessibilityService : AccessibilityService() {
         val handler = android.os.Handler(mainLooper)
         fun next() {
             if (idx >= code.length) {
-                android.util.Log.d("AutoAccessibility", "PIN entered ok=true code=$code")
-                lastPinSuccess = System.currentTimeMillis()
-                isPinRunning = false
+                // Verificar desbloqueo real: no declarar éxito a ciegas.
+                handler.postDelayed({
+                    val stillLocked = try {
+                        (getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
+                    } catch (_: Exception) { true }
+                    isPinRunning = false
+                    if (!stillLocked) {
+                        android.util.Log.d("AutoAccessibility", "PIN verified unlocked code=$code")
+                        lastPinSuccess = System.currentTimeMillis()
+                    } else {
+                        android.util.Log.d("AutoAccessibility", "PIN entry done but still locked, will retry")
+                    }
+                }, 800)
                 return
             }
             val freshRoot = try { rootInActiveWindow ?: findLockScreenRoot() } catch (_: Exception) { null }
@@ -826,26 +843,12 @@ class AutoAccessibilityService : AccessibilityService() {
                 android.util.Log.d("AutoAccessibility", "Digit $c not found, swipe")
                 trySwipeUp()
                 retries++
-                if (retries > 3) {
-                    val dm = resources.displayMetrics
-                    val sw = dm.widthPixels.toFloat()
-                    val sh = dm.heightPixels.toFloat()
-                    val fallback = when (c) {
-                        '0' -> PointF(sw * 0.50f, sh * 0.87f)
-                        else -> {
-                            val colX = floatArrayOf(sw * 0.22f, sw * 0.50f, sw * 0.78f)
-                            val rowY = floatArrayOf(sh * 0.63f, sh * 0.74f, sh * 0.85f)
-                            val n = (c - '1')
-                            PointF(colX[n % 3], rowY[n / 3])
-                        }
-                    }
-                    val path2 = Path().apply { moveTo(fallback.x, fallback.y); lineTo(fallback.x + 1f, fallback.y + 1f) }
-                    val g2 = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path2, 0, 120)).build()
-                    dispatchGesture(g2, null, null)
-                    android.util.Log.d("AutoAccessibility", "Tap digit=$c fallback (${fallback.x.toInt()},${fallback.y.toInt()})")
-                    idx++
-                    retries = 0
-                    handler.postDelayed({ next() }, 400)
+                if (retries > 12) {
+                    // Sin coordenadas adivinadas: un toque falso mete un dígito
+                    // erróneo y bloquea reintentos por el cooldown. Abortar.
+                    android.util.Log.d("AutoAccessibility", "Digit $c not found, abort PIN entry")
+                    isPinRunning = false
+                    return
                 } else {
                     handler.postDelayed({ next() }, 900)
                 }
@@ -891,5 +894,5 @@ class AutoAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
-    override fun onDestroy() { enabled = false; super.onDestroy() }
+    override fun onDestroy() { enabled = false; instance = null; super.onDestroy() }
 }

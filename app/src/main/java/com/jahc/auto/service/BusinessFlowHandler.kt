@@ -23,6 +23,17 @@ object BusinessFlowHandler {
         searchIconTried = false
     }
 
+    private fun killWhatsAppsDelayed(service: AutoAccessibilityService, delayMs: Long) {
+        android.os.Handler(service.mainLooper).postDelayed({
+            try {
+                val am = service.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                am.killBackgroundProcesses("com.whatsapp.w4b")
+                am.killBackgroundProcesses("com.whatsapp")
+                android.util.Log.d("BusinessFlow", "killBackgroundProcesses w4b+whatsapp")
+            } catch (e: Exception) { android.util.Log.e("BusinessFlow", "kill err", e) }
+        }, delayMs)
+    }
+
     private fun findSearchIcon(service: AutoAccessibilityService, root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         service.collectAllClickable(root, candidates)
@@ -165,6 +176,19 @@ object BusinessFlowHandler {
         android.util.Log.d("BusinessFlow", "Set message ${sch.message}")
         val bundle = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, sch.message) }
         edit.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)
+        // Toque en el campo para poner foco y cursor al final antes de enviar
+        edit.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        try {
+            val er = android.graphics.Rect(); edit.getBoundsInScreen(er)
+            if (er.width() > 0 && er.height() > 0) {
+                val cx = er.centerX().toFloat()
+                val cy = er.centerY().toFloat()
+                val path = android.graphics.Path().apply { moveTo(cx, cy); lineTo(cx + 1f, cy + 1f) }
+                val tap = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 80)).build()
+                service.dispatchGesture(tap, null, null)
+                android.util.Log.d("BusinessFlow", "Tap entry to place cursor at ($cx,$cy)")
+            }
+        } catch (_: Exception) {}
 
         android.os.Handler(service.mainLooper).postDelayed({
             val sendRoot = service.rootInActiveWindow
@@ -319,6 +343,7 @@ object BusinessFlowHandler {
                                     service.clearPendingPrefs()
                                     reset()
                                     android.os.Handler(service.mainLooper).postDelayed({ service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }, 1000)
+                                    killWhatsAppsDelayed(service, 4000)
                                 }, 3000)
                             } else {
                                 android.util.Log.d("BusinessFlow", "Second send done, no more Aceptar")
@@ -327,6 +352,7 @@ object BusinessFlowHandler {
                                 service.clearPendingPrefs()
                                 reset()
                                 android.os.Handler(service.mainLooper).postDelayed({ service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }, 1000)
+                                killWhatsAppsDelayed(service, 4000)
                             }
                         }, 3000)
                     }, 1500)
@@ -339,6 +365,7 @@ object BusinessFlowHandler {
                     android.os.Handler(service.mainLooper).postDelayed({ service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }, 800)
                     android.os.Handler(service.mainLooper).postDelayed({ service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }, 1500)
                     android.os.Handler(service.mainLooper).postDelayed({ service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) }, 2200)
+                    killWhatsAppsDelayed(service, 5000)
                 }
             }, 6000)
         }, 2000)
@@ -349,6 +376,7 @@ object BusinessFlowHandler {
                 AutoAccessibilityService.pendingSchedule = null
                 service.clearPendingPrefs()
                 service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                killWhatsAppsDelayed(service, 3000)
             }
         }, 30000)
 

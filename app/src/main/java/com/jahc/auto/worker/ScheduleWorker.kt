@@ -24,46 +24,15 @@ class ScheduleWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ try { wl.release() } catch (_: Exception) {} }, 10000)
         } catch (_: Exception) {}
 
-        // Guarda para que el AccessibilityService lo envíe
-        AutoAccessibilityService.pendingSchedule = sch
-
-        // Si está bloqueado, usa WakeActivity para desbloquear y luego abrir WhatsApp
-        val isLocked = try {
-            val km = applicationContext.getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
-            km.isKeyguardLocked
-        } catch (_: Exception) { false }
-
-        // Siempre usa WakeActivity para quitar AOD y bloquear correctamente, luego abre WhatsApp
-        val wakeIntent = Intent(applicationContext, com.jahc.auto.ui.WakeActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        }
-        try { applicationContext.startActivity(wakeIntent) } catch (_: Exception) {
-            // Si falla Wake, intenta directo (sin package si es dual para que salga selector)
-            val uri = if (sch.phone.isNotBlank()) {
-                var phone = sch.phone.filter { it.isDigit() }
-                if (phone.length == 9) phone = "51$phone"
-                "https://wa.me/$phone?text=${java.net.URLEncoder.encode(sch.message, "UTF-8")}"
-            } else {
-                "https://wa.me/?text=${java.net.URLEncoder.encode(sch.message, "UTF-8")}"
+        // Encolar para envío (un mensaje a la vez, con reintentos y recovery)
+        com.jahc.auto.service.SendQueue.enqueue(sch)
+        try {
+            com.jahc.auto.service.AutoAccessibilityService.instance?.let {
+                com.jahc.auto.service.SendQueue.pumpIfIdle(it)
             }
-            val baseIntent = Intent(Intent.ACTION_VIEW).apply {
-                data = android.net.Uri.parse(uri)
-                if (!sch.isDual()) `package` = sch.targetPackage()
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                if (sch.isDual()) {
-                    val chooser = Intent.createChooser(baseIntent, "Seleccionar aplicación")
-                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    applicationContext.startActivity(chooser)
-                } else {
-                    applicationContext.startActivity(baseIntent)
-                }
-            } catch (_: Exception) {}
-        }
+        } catch (_: Exception) {}
 
-        db.scheduleDao().markSent(id, System.currentTimeMillis())
-        // Reprograma para mañana
+        // Reprograma para mañana (el markSent real lo hace la cola al confirmar SENT)
         scheduleNext(applicationContext, sch)
         return Result.success()
     }

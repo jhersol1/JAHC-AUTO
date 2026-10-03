@@ -19,11 +19,17 @@ class AlarmReceiver : BroadcastReceiver() {
                     val db = com.jahc.auto.data.AppDatabase.get(context)
                     val sch = kotlinx.coroutines.runBlocking { db.scheduleDao().getById(id) } ?: return@Thread
                     if (!sch.enabled) return@Thread
-                    com.jahc.auto.service.AutoAccessibilityService.pendingSchedule = sch
-                    val wakeIntent = Intent(context, com.jahc.auto.ui.WakeActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    // Encolar: la cola garantiza un mensaje a la vez (nunca sobrescribir)
+                    com.jahc.auto.service.SendQueue.enqueue(sch)
+                    val svc = com.jahc.auto.service.AutoAccessibilityService.instance
+                    if (svc != null) {
+                        com.jahc.auto.service.SendQueue.pumpIfIdle(svc)
+                    } else {
+                        val wakeIntent = Intent(context, com.jahc.auto.ui.WakeActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        }
+                        try { context.startActivity(wakeIntent) } catch (_: Exception) {}
                     }
-                    try { context.startActivity(wakeIntent) } catch (_: Exception) {}
                     // También encola WorkManager como respaldo
                     val data = workDataOf("scheduleId" to id)
                     val req = OneTimeWorkRequestBuilder<ScheduleWorker>().setInputData(data).addTag("jahc_$id").build()
