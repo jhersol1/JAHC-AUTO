@@ -55,6 +55,8 @@ class AutoAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Traza cruda de eventos para la máquina (frescura del árbol).
+        try { BusinessSendMachine.onRawEvent(event) } catch (_: Exception) {}
         // Rastreo continuo de la app del usuario (eventos reales, hilo main).
         try {
             val ep = event?.packageName?.toString()
