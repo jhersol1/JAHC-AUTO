@@ -18,7 +18,7 @@ public final class SendQueue {
     private static volatile com.jahc.auto.data.Schedule current;
     @org.jetbrains.annotations.NotNull()
     private static final java.util.concurrent.ConcurrentHashMap<java.lang.Long, java.lang.Long> finishedAt = null;
-    private static final long FINISH_MEMORY_MS = 600000L;
+    private static final long FINISH_MEMORY_MS = 45000L;
     @org.jetbrains.annotations.NotNull()
     public static final com.jahc.auto.service.SendQueue INSTANCE = null;
     

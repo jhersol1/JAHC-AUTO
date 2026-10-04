@@ -38,8 +38,13 @@ class ScheduleWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     companion object {
-        fun scheduleNext(ctx: Context, sch: Schedule) {
-            if (!sch.repeatDaily) return
+        private const val TAG = "ScheduleWorker"
+
+        fun scheduleNext(ctx: Context, sch: Schedule, reason: String = "programada") {
+            if (!sch.repeatDaily) {
+                android.util.Log.d(TAG, "[SCHEDULE] no programada id=${sch.id} (sin repetición)")
+                return
+            }
             val now = java.util.Calendar.getInstance()
             val next = java.util.Calendar.getInstance().apply {
                 set(java.util.Calendar.HOUR_OF_DAY, sch.hour)
@@ -64,10 +69,25 @@ class ScheduleWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
                 val info = android.app.AlarmManager.AlarmClockInfo(next.timeInMillis, pi)
                 try { am.setAlarmClock(info, pi) } catch (_: Exception) { am.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, next.timeInMillis, pi) }
             } catch (_: Exception) {}
+            val hh = String.format("%02d:%02d", next.get(java.util.Calendar.HOUR_OF_DAY), next.get(java.util.Calendar.MINUTE))
+            android.util.Log.d(TAG, "[SCHEDULE] $reason id=${sch.id} para $hh en ${delay / 60000}min")
         }
 
         fun cancel(ctx: Context, id: Long) {
             WorkManager.getInstance(ctx).cancelUniqueWork("jahc_$id")
+            android.util.Log.d(TAG, "[SCHEDULE] programación cancelada id=$id (WorkManager)")
+        }
+
+        fun cancelAlarm(ctx: Context, id: Long) {
+            try {
+                val am = ctx.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                val intent = android.content.Intent(ctx, AlarmReceiver::class.java).apply { putExtra("scheduleId", id) }
+                val pi = android.app.PendingIntent.getBroadcast(ctx, id.toInt(), intent, android.app.PendingIntent.FLAG_IMMUTABLE)
+                am.cancel(pi)
+                android.util.Log.d(TAG, "[SCHEDULE] programación cancelada id=$id (AlarmManager)")
+            } catch (e: Exception) {
+                android.util.Log.d(TAG, "[SCHEDULE] cancel alarm err id=$id ${e.message}")
+            }
         }
     }
 }

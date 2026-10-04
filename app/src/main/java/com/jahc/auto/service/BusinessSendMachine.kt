@@ -41,14 +41,16 @@ private enum class Screen { LOCK, PICKER, SEARCH, CHAT, OTHER_WA, BACKGROUND, UN
 object BusinessSendMachine {
     private const val TAG = "BusinessSendMachine"
     private const val POLL_MS = 400L
-    private const val MAX_RETRY = 3
+    // Presupuesto GLOBAL de recovery por ejecución: pertenece a toda la corrida,
+    // no se reinicia al cambiar de estado.
+    private const val MAX_RECOVERY = 9
+    private var recoveryCount = 0
 
     @Volatile var active = false
     private var sch: Schedule? = null
     private var state = SendState.IDLE
     private var entered = false
     private var stateSince = 0L
-    private var attempts = 0
     private var openedWhatsApp = false
     private var sentClicked = false
     private var sendClicks = 0
@@ -60,8 +62,9 @@ object BusinessSendMachine {
     private var jobStart = 0L
     private var sendArmed = false
     private var sendArmedAt = 0L
-    private const val OVERALL_TIMEOUT_MS = 240000L
+    private const val OVERALL_TIMEOUT_MS = 150000L
     private var bubblesBeforeSend = -1
+    private var aceptarHandled = false
     // CASO 1 (arrancó bloqueado) vs CASO 2 (usuario en otra app).
     private var startedLocked = false
     private var prevPkg: String? = null
@@ -84,6 +87,8 @@ object BusinessSendMachine {
         failReason = null
         jobStart = System.currentTimeMillis()
         bubblesBeforeSend = -1
+        aceptarHandled = false
+        recoveryCount = 0
         // Foto inicial: ¿bloqueado o usuario en otra app? Define el cleanup.
         startedLocked = isLocked(svc)
         prevPkg = if (startedLocked) null else AutoAccessibilityService.lastUserPkg
@@ -121,19 +126,20 @@ object BusinessSendMachine {
         state = s
         entered = false
         stateSince = System.currentTimeMillis()
-        attempts = 0
+        // recoveryCount NO se resetea: presupuesto global de la ejecución.
         log("[STATE] $s")
         tick(svc)
     }
 
     private fun retry(svc: AutoAccessibilityService, why: String) {
-        attempts++
-        if (attempts > MAX_RETRY) {
-            fail(svc, "$state timeout ($why)")
+        recoveryCount++
+        if (recoveryCount > MAX_RECOVERY) {
+            log("[RECOVERY] limit reached ($MAX_RECOVERY)")
+            fail(svc, "RECOVERY_LIMIT_REACHED at $state ($why)")
             return
         }
         log("[ERROR] $state timeout ($why)")
-        log("[RECOVERY] attempt $attempts/$MAX_RETRY")
+        log("[RECOVERY] attempt $recoveryCount/$MAX_RECOVERY")
         entered = false
         stateSince = System.currentTimeMillis()
         recover(svc)
@@ -142,6 +148,7 @@ object BusinessSendMachine {
     private fun fail(svc: AutoAccessibilityService, reason: String) {
         failReason = reason
         log("[ERROR] FAILED id=${sch?.id} reason=$reason")
+        log("[FAILED] $reason")
         state = SendState.FAILED
         navigateBack(svc)
         try { BusinessFlowHandler.reset() } catch (_: Exception) {}
@@ -234,7 +241,6 @@ object BusinessSendMachine {
             state = SendState.UNLOCKING
             entered = false
             stateSince = System.currentTimeMillis()
-            attempts = 0
             return
         }
         val scr = detectScreen(svc)
@@ -278,9 +284,14 @@ object BusinessSendMachine {
         if (lastTick - stateSince > timeoutFor(state)) {
             if (state == SendState.UNLOCKING) {
                 // Desbloqueo lo hace el service con eventos; solo extender ventana.
-                attempts++
-                if (attempts > MAX_RETRY) fail(svc, "unlock timeout")
-                else { log("[ERROR] UNLOCKING timeout, still waiting (${attempts}/$MAX_RETRY)"); stateSince = System.currentTimeMillis() }
+                recoveryCount++
+                if (recoveryCount > MAX_RECOVERY) {
+                    log("[RECOVERY] limit reached ($MAX_RECOVERY)")
+                    fail(svc, "RECOVERY_LIMIT_REACHED at UNLOCKING")
+                } else {
+                    log("[ERROR] UNLOCKING timeout, still waiting ($recoveryCount/$MAX_RECOVERY)")
+                    stateSince = System.currentTimeMillis()
+                }
                 return
             }
             retry(svc, "no condition")
@@ -425,15 +436,15 @@ object BusinessSendMachine {
                 if (cur == want && want.isNotEmpty()) { log("[CHECK] message entered=true"); advance(svc, SendState.SENDING) }
             }
             SendState.SENDING -> {
-                // Two-phase: armar, esperar 600ms a que los eventos refresquen el
-                // árbol (bounds viejos = tap al vacío), y recién tocar Send fresco.
-                val cur = entryText(svc)
-                val want = sch?.message?.trim() ?: ""
-                if (sentClicked && (cur != want || sendClicks >= 2)) {
-                    log("[CHECK] send already tapped ${sendClicks}x, verify only")
+                // PROHIBIDO re-tap: un solo tap por ejecución. Si ya se tocó,
+                // solo verificar (nunca duplicar).
+                if (sentClicked) {
+                    log("[CHECK] already tapped once, verify only (no retap)")
                     advance(svc, SendState.VERIFYING_SENT)
                     return
                 }
+                // Two-phase: armar, esperar 600ms a que los eventos refresquen el
+                // árbol (bounds viejos = tap al vacío), y recién tocar Send fresco.
                 if (!sendArmed) {
                     sendArmed = true
                     sendArmedAt = System.currentTimeMillis()
@@ -451,26 +462,33 @@ object BusinessSendMachine {
                 }
             }
             SendState.VERIFYING_SENT -> {
+                log("[VERIFY_SENT] check")
                 val root = activeRoot(svc)
                 if (root != null && (svc.containsText(root, "Aceptar") || svc.containsText(root, "Accept"))) {
-                    handleAceptar(svc, root)
+                    if (!aceptarHandled) {
+                        aceptarHandled = true
+                        handleAceptar(svc, root)
+                    }
                     return
                 }
                 val cur = entryText(svc)
                 if (cur.isEmpty()) {
-                    log("[CHECK] message sent=true (entry empty)")
+                    log("[VERIFY_SENT] evidence found (entry empty, no delivery confirmation required)")
                     advance(svc, SendState.CLEANUP)
                     return
                 }
-                // Aunque el campo siga lleno, una burbuja nueva prueba el envío.
+                // Aunque el campo siga lleno, una burbuja nueva prueba la
+                // colocación local. Los checks de entrega (✓✓) NO son requisito.
                 val want = sch?.message?.trim() ?: ""
                 if (want.isNotEmpty() && bubblesBeforeSend >= 0) {
                     val now = countBubbles(svc, want)
                     if (now > bubblesBeforeSend) {
-                        log("[CHECK] message sent=true (bubbles $bubblesBeforeSend->$now)")
+                        log("[VERIFY_SENT] evidence found (bubbles $bubblesBeforeSend->$now, no delivery confirmation required)")
                         advance(svc, SendState.CLEANUP)
+                        return
                     }
                 }
+                log("[VERIFY_SENT] pending/no delivery confirmation")
             }
             else -> {}
         }
@@ -736,7 +754,7 @@ object BusinessSendMachine {
         SendState.TYPING_MESSAGE -> 8000L
         SendState.VERIFYING_MESSAGE -> 10000L
         SendState.SENDING -> 10000L
-        SendState.VERIFYING_SENT -> 15000L
+        SendState.VERIFYING_SENT -> 12000L
         SendState.CLEANUP -> 8000L
         else -> 5000L
     }

@@ -138,9 +138,15 @@ class EditActivity : AppCompatActivity() {
                 enabled = true
             )
             lifecycleScope.launch {
+                val isEdit = editingId != -1L
+                if (isEdit) {
+                    android.util.Log.d("EditActivity", "[SCHEDULE] programación editada id=$editingId")
+                    ScheduleWorker.cancel(this@EditActivity, editingId)
+                    ScheduleWorker.cancelAlarm(this@EditActivity, editingId)
+                }
                 val newId = db.scheduleDao().upsert(sch)
                 val saved = sch.copy(id = if (sch.id == 0L) newId else sch.id)
-                ScheduleWorker.scheduleNext(this@EditActivity, saved)
+                ScheduleWorker.scheduleNext(this@EditActivity, saved, if (isEdit) "reprogramada" else "creada")
                 Toast.makeText(this@EditActivity, "Guardado permanente", Toast.LENGTH_SHORT).show()
                 finish()
             }

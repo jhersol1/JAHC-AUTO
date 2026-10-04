@@ -17,8 +17,10 @@ class TestReceiver : BroadcastReceiver() {
                 android.util.Log.d("TestReceiver", "=== TEST START ===")
                 val target = intent.getStringExtra("target") ?: "whatsapp_dual"
                 val msg = intent.getStringExtra("message") ?: "hola"
+                // sid opcional: mismo sid 2 veces seguidas prueba el dedup (una sola ejecución).
+                val sid = intent.getLongExtra("sid", -System.currentTimeMillis())
                 val testSchedule = com.jahc.auto.data.Schedule(
-                    id = -System.currentTimeMillis(),
+                    id = sid,
                     contactName = "Jhersol2.0",
                     phone = "991004829",
                     target = target,

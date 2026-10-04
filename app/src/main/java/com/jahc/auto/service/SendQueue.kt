@@ -22,26 +22,28 @@ object SendQueue {
     private val processing = AtomicBoolean(false)
     @Volatile var current: Schedule? = null
     private val finishedAt = ConcurrentHashMap<Long, Long>()
-    private const val FINISH_MEMORY_MS = 10 * 60 * 1000L
+    // Ventana corta: solo cubre la carrera AlarmManager+WorkManager del MISMO
+    // disparo (segundos). Una reprogramación legítima llega minutos después.
+    private const val FINISH_MEMORY_MS = 45_000L
 
     fun enqueue(sch: Schedule): Boolean {
         val now = System.currentTimeMillis()
         finishedAt.entries.removeIf { now - it.value > FINISH_MEMORY_MS }
         val cur = current
         if (cur != null && cur.id == sch.id) {
-            android.util.Log.d(TAG, "[QUEUE] duplicate ignored, already processing id=${sch.id}")
+            android.util.Log.d(TAG, "[QUEUE] duplicado descartado id=${sch.id} (ya en proceso)")
             return false
         }
         if (queue.any { it.id == sch.id }) {
-            android.util.Log.d(TAG, "[QUEUE] duplicate ignored, already queued id=${sch.id}")
+            android.util.Log.d(TAG, "[QUEUE] duplicado descartado id=${sch.id} (ya en cola)")
             return false
         }
         if (finishedAt.containsKey(sch.id)) {
-            android.util.Log.d(TAG, "[QUEUE] duplicate ignored, recently finished id=${sch.id}")
+            android.util.Log.d(TAG, "[QUEUE] duplicado descartado id=${sch.id} (disparo repetido <45s)")
             return false
         }
         queue.add(sch)
-        android.util.Log.d(TAG, "[QUEUE] enqueued id=${sch.id} to=${sch.contactName} phone=${sch.phone} size=${queue.size}")
+        android.util.Log.d(TAG, "[QUEUE] ejecución aceptada id=${sch.id} to=${sch.contactName} phone=${sch.phone} size=${queue.size}")
         return true
     }
 
@@ -56,7 +58,7 @@ object SendQueue {
             while (next == null && guard++ < 8) {
                 val cand = queue.poll() ?: break
                 if (cand.id == current?.id || finishedAt.containsKey(cand.id)) {
-                    android.util.Log.d(TAG, "[QUEUE] dropped duplicate id=${cand.id} at dequeue")
+                    android.util.Log.d(TAG, "[QUEUE] duplicado descartado id=${cand.id} al sacar")
                     continue
                 }
                 next = cand
@@ -69,6 +71,7 @@ object SendQueue {
         if (processing.compareAndSet(false, true)) {
             current = sch
             val total = pendingCount()
+            android.util.Log.d(TAG, "[QUEUE] next execution id=${sch.id} (${total - 1} waiting)")
             android.util.Log.d(TAG, "[QUEUE] processing id=${sch.id} (${total - 1} waiting)")
             BusinessSendMachine.start(svc, sch)
         }
@@ -91,7 +94,7 @@ object SendQueue {
         finishedAt[sch.id] = System.currentTimeMillis()
         current = null
         processing.set(false)
-        android.util.Log.d(TAG, "[QUEUE] id=${sch.id} ${if (success) "SENT" else "FAILED($reason)"} remaining=${queue.size}")
+        android.util.Log.d(TAG, "[QUEUE] finish id=${sch.id} ${if (success) "SENT" else "FAILED($reason)"} remaining=${queue.size}")
         pumpIfIdle(svc)
     }
 

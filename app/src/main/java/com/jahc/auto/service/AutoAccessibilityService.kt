@@ -802,31 +802,82 @@ class AutoAccessibilityService : AccessibilityService() {
 
     private var lastPinTap = 0L
     @Volatile private var isPinRunning = false
+    @Volatile private var pinGeneration = 0L
+
+    /** ¿Hay puntos pendientes? El botón ELIMINAR solo existe si hay >=1 dígito. */
+    private fun hasPinDots(root: AccessibilityNodeInfo): Boolean {
+        return findButtonByText(root, "ELIMINAR") ?: findNodeWithText(root, "ELIMINAR")
+            ?: findNodeContainingText(root, "ELIMINAR") ?: findNodeContainingText(root, "Delete") != null
+    }
+
+    private fun findDeleteButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        return findButtonByText(root, "ELIMINAR") ?: findNodeWithText(root, "ELIMINAR")
+            ?: findNodeContainingText(root, "ELIMINAR") ?: findNodeContainingText(root, "Delete")
+    }
+
     private fun tapDigitsAsync(code: String) {
+        val gen = ++pinGeneration
         var idx = 0
         var retries = 0
+        var clears = 0
+        var cleared = false
         val handler = android.os.Handler(mainLooper)
+        fun alive(): Boolean = gen == pinGeneration && isPinRunning
         fun next() {
+            if (!alive()) return
             if (idx >= code.length) {
-                // Verificar desbloqueo real: no declarar éxito a ciegas.
-                handler.postDelayed({
+                // Fase verificación: poll triple ~500ms. Solo éxito si desbloqueó.
+                var checks = 0
+                fun verify() {
+                    if (!alive()) return
                     val stillLocked = try {
                         (getSystemService(Context.KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
                     } catch (_: Exception) { true }
-                    isPinRunning = false
                     if (!stillLocked) {
                         android.util.Log.d("AutoAccessibility", "PIN verified unlocked code=$code")
                         lastPinSuccess = System.currentTimeMillis()
-                    } else {
-                        android.util.Log.d("AutoAccessibility", "PIN entry done but still locked, will retry")
+                        isPinRunning = false
+                        pinGeneration++
+                        return
                     }
-                }, 800)
+                    checks++
+                    if (checks >= 3) {
+                        android.util.Log.d("AutoAccessibility", "PIN entry done but still locked, will retry")
+                        isPinRunning = false
+                        return
+                    }
+                    handler.postDelayed({ verify() }, 500)
+                }
+                handler.postDelayed({ verify() }, 400)
                 return
             }
             val freshRoot = try { rootInActiveWindow ?: findLockScreenRoot() } catch (_: Exception) { null }
             if (freshRoot == null) {
                 handler.postDelayed({ next() }, 500)
                 return
+            }
+            // Fase limpieza: si quedaron puntos de un intento previo, borrarlos
+            // primero (long-press/clics en ELIMINAR) para partir siempre de cero.
+            // Así jamás se anexan dígitos ni hay overflow.
+            if (!cleared) {
+                if (hasPinDots(freshRoot)) {
+                    if (clears >= 6) {
+                        android.util.Log.d("AutoAccessibility", "PIN clear failed, abort PIN entry")
+                        isPinRunning = false
+                        pinGeneration++
+                        return
+                    }
+                    val del = findDeleteButton(freshRoot)
+                    if (del != null) {
+                        del.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        clears++
+                        android.util.Log.d("AutoAccessibility", "PIN clear tap $clears")
+                    }
+                    handler.postDelayed({ next() }, 350)
+                    return
+                }
+                cleared = true
+                android.util.Log.d("AutoAccessibility", "PIN pad clean, start digit 1")
             }
             val c = code[idx]
             val p = findDigitBounds(freshRoot, c.toString())
@@ -846,9 +897,10 @@ class AutoAccessibilityService : AccessibilityService() {
                 retries++
                 if (retries > 12) {
                     // Sin coordenadas adivinadas: un toque falso mete un dígito
-                    // erróneo y bloquea reintentos por el cooldown. Abortar.
+                    // erróneo. Abortar e invalidar callbacks viejos.
                     android.util.Log.d("AutoAccessibility", "Digit $c not found, abort PIN entry")
                     isPinRunning = false
+                    pinGeneration++
                     return
                 } else {
                     handler.postDelayed({ next() }, 900)
