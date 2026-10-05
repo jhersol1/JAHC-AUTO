@@ -98,6 +98,19 @@ object SendQueue {
         pumpIfIdle(svc)
     }
 
+    /** Fin UNCERTAIN: libera ya, sin marcar enviado ni bloquear reintentos. */
+    fun finishUncertain(svc: AutoAccessibilityService, sch: Schedule, reason: String?) {
+        try {
+            svc.showResultNotification(false, sch, reason, uncertain = true)
+        } catch (_: Exception) {}
+        try { svc.clearPendingPrefs() } catch (_: Exception) {}
+        if (AutoAccessibilityService.pendingSchedule?.id == sch.id) AutoAccessibilityService.pendingSchedule = null
+        current = null
+        processing.set(false)
+        android.util.Log.d(TAG, "[QUEUE] finish id=${sch.id} UNCERTAIN($reason) remaining=${queue.size}")
+        pumpIfIdle(svc)
+    }
+
     /** Lleva WhatsApp al frente. Bloqueado: setAlarmClock (whitelisted BAL). Desbloqueado: directo. */
     fun openWhatsApp(svc: AutoAccessibilityService) {
         try {

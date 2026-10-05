@@ -450,7 +450,7 @@ class AutoAccessibilityService : AccessibilityService() {
         try { getSharedPreferences("jahc_auto", MODE_PRIVATE).edit().clear().apply() } catch (_: Exception) {}
     }
 
-    internal fun showResultNotification(success: Boolean, sch: Schedule, reason: String? = null) {
+    internal fun showResultNotification(success: Boolean, sch: Schedule, reason: String? = null, uncertain: Boolean = false) {
         try {
             clearPendingPrefs()
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -460,8 +460,8 @@ class AutoAccessibilityService : AccessibilityService() {
                 ch.enableVibration(true)
                 nm.createNotificationChannel(ch)
             }
-            val title = if (success) "Envío correcto" else "Envío fallido"
-            val text = if (success) "Mensaje a ${sch.contactName} enviado" else "No se pudo enviar a ${sch.contactName} - ${reason ?: "demora/altercado"}"
+            val title = if (uncertain) "Envío sin confirmar" else if (success) "Envío correcto" else "Envío fallido"
+            val text = if (uncertain) "Se envió a ${sch.contactName}, pendiente de confirmación" else if (success) "Mensaje a ${sch.contactName} enviado" else "No se pudo enviar a ${sch.contactName} - ${reason ?: "demora/altercado"}"
             val n = NotificationCompat.Builder(this, chId)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(title)
